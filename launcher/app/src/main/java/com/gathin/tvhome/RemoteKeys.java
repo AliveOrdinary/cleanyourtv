@@ -6,6 +6,8 @@ import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.media.AudioManager;
 import android.media.tv.TvContract;
 import android.os.Build;
@@ -398,6 +400,33 @@ final class RemoteKeys {
      */
     static boolean isActivity(String target) {
         return target != null && inputId(target) == null && target.indexOf('/') > 0;
+    }
+
+    /** True while the component's app is not pm-disabled and the component itself is not disabled, so a
+     *  configured target that merely went offline (debloated, or disabled by its own updater) reads the same
+     *  as one that was never installed (home_redirect_component). */
+    static boolean isEnabled(Context ctx, ComponentName component) {
+        PackageManager pm = ctx.getPackageManager();
+        ApplicationInfo app;
+        try {
+            app = pm.getApplicationInfo(component.getPackageName(), 0);
+        } catch (PackageManager.NameNotFoundException notInstalled) {
+            return false;
+        }
+        if (!app.enabled) return false;
+        switch (pm.getComponentEnabledSetting(component)) {
+            case PackageManager.COMPONENT_ENABLED_STATE_DISABLED:
+            case PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER:
+            case PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED:
+                return false;
+            default:
+                try {
+                    pm.getActivityInfo(component, 0);   // also confirms the activity itself exists
+                    return true;
+                } catch (PackageManager.NameNotFoundException noSuchActivity) {
+                    return false;
+                }
+        }
     }
 
     /** Opens an app from a remote button: its TV entry if it has one, else its phone entry. An "input:<id>" target

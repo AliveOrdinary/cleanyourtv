@@ -37,6 +37,10 @@ import java.util.Set;
  * that launcher on again after it was disabled (XGIMI's xrmservice does, on its own remote keys), or that cannot be
  * disabled at all, and a short press of Home opens this launcher even when the stock home is already on screen.
  *
+ * With home_redirect_component set, every one of those redirects opens that app instead of this launcher itself
+ * (checked for installed and enabled on every redirect, falling back to this launcher otherwise). This launcher
+ * stays installed and keeps the accessibility binding either way; only what Home shows changes.
+ *
  * With power_on_home set, a Live TV window (live_tv_package) that the firmware opens by itself at power-on is sent
  * back here too, until the first key press after boot or after the screen turns on (Changhong / Homwee boards).
  * With power_on_home_always set, Home comes up at every power-on whatever is in front, for TVs that resume their
@@ -71,6 +75,9 @@ public class HomeKeyService extends AccessibilityService {
     private final Set<String> stockHome = new HashSet<>();
     /** stock_home_redirect, the stock launcher's package. */
     private String stockHomePackage = "";
+    /** home_redirect_component: another app's Home (or "package/.Activity") opened in this launcher's place;
+     *  empty keeps the historical behaviour of opening this launcher itself. */
+    private String homeRedirectComponent = "";
     /** power_on_home: the Live TV package to send back to Home, empty when off; armed until this uptime or a key. */
     private String powerOnLiveTv = "";
     private long powerOnUntil;
@@ -201,6 +208,7 @@ public class HomeKeyService extends AccessibilityService {
         boolean watchFront = !frontAppKeys.isEmpty() || !frontAppScancodes.isEmpty();
         stockHome.clear();
         stockHomePackage = config.stockHomeRedirect;
+        homeRedirectComponent = config.homeRedirectComponent;
         if (!config.stockHomeRedirect.isEmpty()) {
             Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).setPackage(config.stockHomeRedirect);
             for (ResolveInfo ri : getPackageManager().queryIntentActivities(home, PackageManager.MATCH_DISABLED_COMPONENTS)) {
@@ -415,10 +423,27 @@ public class HomeKeyService extends AccessibilityService {
     }
 
     private void openHome() {
-        Intent open = stockHomeStays() ? new Intent(this, MainActivity.class)
-                : new Intent(Intent.ACTION_MAIN).setPackage(getPackageName());
+        Intent open = redirectTarget();
+        if (open == null) {
+            open = stockHomeStays() ? new Intent(this, MainActivity.class)
+                    : new Intent(Intent.ACTION_MAIN).setPackage(getPackageName());
+        }
         startActivity(open.addCategory(Intent.CATEGORY_HOME)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED));
+    }
+
+    /** home_redirect_component: another app's Home in this launcher's place, resolved fresh on every call (not
+     *  cached from loadConfig) so an app disabled or removed after this service was bound still falls back to
+     *  this launcher instead of Home leading nowhere. null when the key is empty or the target is unavailable. */
+    private Intent redirectTarget() {
+        if (homeRedirectComponent.isEmpty()) return null;
+        if (RemoteKeys.isActivity(homeRedirectComponent)) {
+            ComponentName target = ComponentName.unflattenFromString(homeRedirectComponent);
+            return target != null && RemoteKeys.isEnabled(this, target) ? new Intent().setComponent(target) : null;
+        }
+        Intent open = getPackageManager().getLeanbackLaunchIntentForPackage(homeRedirectComponent);
+        if (open == null) open = getPackageManager().getLaunchIntentForPackage(homeRedirectComponent);
+        return open;
     }
 
     /** stock_home_redirect while Android's Home is still the stock launcher (launcherx on Google TV outranks this
