@@ -221,8 +221,11 @@
 
     <!-- Where stock_home_redirect, home_long_press_home and the ALL_APPS key send the TV, in place of this
          launcher: another installed app's package (its own leanback, or phone, entry), or "package/.Activity"
-         ("package/package.Activity" also works) for one specific activity. Checked fresh every time, so an app
-         that is missing or pm-disabled falls back to this launcher instead of leaving Home on a black screen.
+         ("package/package.Activity" also works) for one specific activity. The package or activity named must
+         be that app's own Home activity (it has to answer a MAIN+HOME query itself); an app's other activities
+         are rejected even if otherwise launchable. Checked fresh every time, so an app that is missing,
+         pm-disabled or not Home-shaped falls back to this launcher instead of leaving Home on a black screen,
+         and a target that does not stay in the foreground falls back the same way after a few rapid attempts.
          This launcher stays installed and Home either way: HomeKeyService's accessibility binding, and the
          watch for stock_home_redirect's launcher, both live in this app, so it is never itself the redirect
          target. Leave empty to open this launcher as before (HOME_KEY_SERVICE=1; a theme's config.json can set

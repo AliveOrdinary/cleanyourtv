@@ -18,13 +18,16 @@ import android.os.UserManager;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.provider.Settings;
+import android.util.Log;
 import android.view.KeyEvent;
 import android.view.ViewConfiguration;
 import android.view.accessibility.AccessibilityEvent;
 import android.widget.Toast;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -38,8 +41,16 @@ import java.util.Set;
  * disabled at all, and a short press of Home opens this launcher even when the stock home is already on screen.
  *
  * With home_redirect_component set, every one of those redirects opens that app instead of this launcher itself
- * (checked for installed and enabled on every redirect, falling back to this launcher otherwise). This launcher
- * stays installed and keeps the accessibility binding either way; only what Home shows changes.
+ * (checked for installed, enabled and itself answering a MAIN+HOME query on every redirect, falling back to
+ * this launcher otherwise). This launcher stays installed and keeps the accessibility binding either way; only
+ * what Home shows changes. A target that does not stay in the foreground - crashing, or finishing straight
+ * back to whatever is behind it - would otherwise retrigger this service as fast as Android cycles the
+ * windows; CUSTOM_HOME_GUARD_COUNT attempts within CUSTOM_HOME_GUARD_WINDOW_MS fall back to this launcher
+ * instead, for that call only. Android does not consume the Home key on its way here (#1274 needs it to also
+ * reach the system), so one press alone opens the custom target through two paths - the window-watch above,
+ * almost at once, and redirectHomeKey()'s own delayed call, HOME_KEY_DELAY_MS later - and only the one with no
+ * Home key in the last HOME_KEY_RECENT_MS counts toward the guard, so ordinary presses, however fast, cannot
+ * trip it themselves (countsTowardCustomHomeGuard).
  *
  * With power_on_home set, a Live TV window (live_tv_package) that the firmware opens by itself at power-on is sent
  * back here too, until the first key press after boot or after the screen turns on (Changhong / Homwee boards).
@@ -54,6 +65,7 @@ import java.util.Set;
  *   settings put secure accessibility_enabled 1
  */
 public class HomeKeyService extends AccessibilityService {
+    private static final String TAG = "TvHome.HomeKeyService";
 
     /** restore_key_services was on when the config was read: this helper is noted for ServiceRepair. */
     private boolean repairRecord;
@@ -78,6 +90,42 @@ public class HomeKeyService extends AccessibilityService {
     /** home_redirect_component: another app's Home (or "package/.Activity") opened in this launcher's place;
      *  empty keeps the historical behaviour of opening this launcher itself. */
     private String homeRedirectComponent = "";
+    /** How many recent attempts to launch home_redirect_component's target the loop guard remembers, and the
+     *  window they must all land inside before it skips one (openHome, loopingOnCustomHome). A target that
+     *  does not stay in the foreground sends the window-watch straight back into another redirect, with no
+     *  debounce on that path, as fast as Android can cycle the windows - CUSTOM_HOME_GUARD_COUNT in a row
+     *  caught that in well under a second on an Onn 4K Pro (#SetupFileOpenActivity). */
+    static final int CUSTOM_HOME_GUARD_COUNT = 3;
+    static final long CUSTOM_HOME_GUARD_WINDOW_MS = 2_000L;
+    /** elapsedRealtime of the last CUSTOM_HOME_GUARD_COUNT attempts to launch home_redirect_component's
+     *  target, oldest at customHomeAttemptNext; see loopingOnCustomHome. No separate "gave up" state: once the
+     *  oldest entry ages past CUSTOM_HOME_GUARD_WINDOW_MS the next attempt is let through again. */
+    private final long[] customHomeAttempts = freshGuardRing();
+    /** How long after a Home key press a window-watch attempt is still "the same press" and does not count
+     *  toward the guard: Android does not consume the Home key on the way to redirectHomeKey() (#1274 needs
+     *  it to reach the system too), so a single physical press makes the system open launcherx, which the
+     *  window-watch sees and redirects for - and redirectHomeKey()'s own delayed call to openHome() can follow
+     *  moments later, from the same one press. Without this, two presses alone can look like the start of a
+     *  loop (#SetupFileOpenActivity, found on an Onn 4K Pro: two real presses cost 4 counted attempts - the
+     *  window-watch's and the key path's, for each - tripping on the second press). */
+    static final long HOME_KEY_RECENT_MS = 1_000L;
+    /** elapsedRealtime of the last Home (or ALL_APPS) key event seen in onKeyEvent, set there rather than in
+     *  openHome() so the window-watch call that the same press's launcherx flash triggers - which fires first,
+     *  well before redirectHomeKey()'s own HOME_KEY_DELAY_MS - already sees it. Seeded far enough in the past
+     *  that "no key has ever been pressed" never reads as recent, for the same reason freshGuardRing() seeds
+     *  the ring rather than leaving it at zero. */
+    private long lastHomeKeyAt = Long.MIN_VALUE / 2;
+
+    /** A ring buffer whose slots read as arbitrarily long ago until each is actually written, so the guard
+     *  cannot misfire on the first few attempts after a service rebind: plain zero-initialization would have
+     *  `now - 0` read as recent for any small now, which is exactly what elapsedRealtime() is in the first
+     *  couple of seconds after a real device boot (and what a JVM test's own now values look like too). */
+    static long[] freshGuardRing() {
+        long[] ring = new long[CUSTOM_HOME_GUARD_COUNT];
+        for (int i = 0; i < ring.length; i++) ring[i] = Long.MIN_VALUE / 2;
+        return ring;
+    }
+    private int customHomeAttemptNext;
     /** power_on_home: the Live TV package to send back to Home, empty when off; armed until this uptime or a key. */
     private String powerOnLiveTv = "";
     private long powerOnUntil;
@@ -288,15 +336,18 @@ public class HomeKeyService extends AccessibilityService {
                 holdAppKeys.get(event.getKeyCode()))) return true;
         // home_long_press_home: Android never sees the Home key, so a held press cannot turn into ALL_APPS.
         if (homeLongPressHome && event.getKeyCode() == KeyEvent.KEYCODE_HOME) {
-            if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) openHome();
+            lastHomeKeyAt = SystemClock.elapsedRealtime();
+            if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) openHome(true);
             return true;
         }
         if (event.getKeyCode() == KeyEvent.KEYCODE_HOME && !stockHome.isEmpty()) {
+            lastHomeKeyAt = SystemClock.elapsedRealtime();
             redirectHomeKey(event);
             return false;
         }
         if (event.getKeyCode() != KeyEvent.KEYCODE_ALL_APPS) return false;
-        if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) openHome();
+        lastHomeKeyAt = SystemClock.elapsedRealtime();
+        if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) openHome(true);
         return true;
     }
 
@@ -324,12 +375,12 @@ public class HomeKeyService extends AccessibilityService {
         }
         // power_on_home: the firmware opened Live TV by itself at power-on, before anyone pressed a key.
         if (powerOnRedirect(powerOnLiveTv, event.getPackageName(), SystemClock.elapsedRealtime(), powerOnUntil)) {
-            openHome();
+            openHome(false);
             return;
         }
         // stock_home_redirect: the firmware turned the stock launcher back on and its home screen came up.
         CharSequence cls = event.getClassName();
-        if (!stockHome.isEmpty() && cls != null && stockHome.contains(cls.toString())) openHome();
+        if (!stockHome.isEmpty() && cls != null && stockHome.contains(cls.toString())) openHome(false);
     }
 
     /** How long power_on_home stays armed after the screen turns on without a reboot. */
@@ -357,7 +408,7 @@ public class HomeKeyService extends AccessibilityService {
 
     /** power_on_home_always: Home, unless a key was pressed since the screen came on (the user has the TV). */
     private void homeAtPowerOn() {
-        if (stillArmed(SystemClock.elapsedRealtime(), powerOnUntil)) openHome();
+        if (stillArmed(SystemClock.elapsedRealtime(), powerOnUntil)) openHome(false);
     }
 
     static boolean stillArmed(long now, long armedUntil) {
@@ -414,7 +465,7 @@ public class HomeKeyService extends AccessibilityService {
     private void redirectHomeKey(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()
                 && isShortPress(event.getDownTime(), event.getEventTime(), ViewConfiguration.getLongPressTimeout())) {
-            handler.postDelayed(this::openHome, HOME_KEY_DELAY_MS);
+            handler.postDelayed(() -> openHome(true), HOME_KEY_DELAY_MS);
         }
     }
 
@@ -422,17 +473,61 @@ public class HomeKeyService extends AccessibilityService {
         return upTime - downTime < longPressTimeout;
     }
 
-    private void openHome() {
+    /** fromKeyPress: true from a key event's own handling (redirectHomeKey's delayed callback,
+     *  home_long_press_home, the ALL_APPS branch); false from onAccessibilityEvent's window-watch and
+     *  power_on_home(_always), which no key drives. Decides whether this call's custom-target attempt counts
+     *  toward the loop guard - see countsTowardCustomHomeGuard. */
+    private void openHome(boolean fromKeyPress) {
         Intent custom = redirectTarget();
         if (custom != null) {
-            Intent toStart = custom.addCategory(Intent.CATEGORY_HOME)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-            if (tryCustomHome(() -> startActivity(toStart))) return;
+            long now = SystemClock.elapsedRealtime();
+            boolean counts = countsTowardCustomHomeGuard(fromKeyPress, lastHomeKeyAt, now);
+            boolean blocked = counts && loopingOnCustomHome(customHomeAttempts, customHomeAttemptNext, now);
+            Log.d(TAG, "openHome: " + (fromKeyPress ? "key press" : "window-watch/power-on")
+                    + ", counts=" + counts + ", blocked=" + blocked);
+            if (blocked) {
+                Log.w(TAG, "home_redirect_component (" + homeRedirectComponent + ") launched "
+                        + CUSTOM_HOME_GUARD_COUNT + " times in " + CUSTOM_HOME_GUARD_WINDOW_MS
+                        + "ms - it is not staying in the foreground, so this Home goes to this launcher instead");
+            } else {
+                if (counts) customHomeAttemptNext = (customHomeAttemptNext + 1) % customHomeAttempts.length;
+                Intent toStart = custom.addCategory(Intent.CATEGORY_HOME)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+                if (tryCustomHome(() -> startActivity(toStart))) return;
+            }
         }
         Intent open = stockHomeStays() ? new Intent(this, MainActivity.class)
                 : new Intent(Intent.ACTION_MAIN).setPackage(getPackageName());
         startActivity(open.addCategory(Intent.CATEGORY_HOME)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED));
+    }
+
+    /** True when a custom-target launch attempt should count toward the loop guard: never for one triggered
+     *  directly by a key press (it is the press, and redirectHomeKey's delayed call and the window-watch call
+     *  the same press's launcherx flash triggers can both fire for it - counting the key-driven one would
+     *  double that), and not for a window-watch (or power-on) attempt either while a key press landed within
+     *  HOME_KEY_RECENT_MS of now (the same press's flash reaching onAccessibilityEvent). A target that
+     *  retriggers the window-watch on its own has no key behind any of its attempts, so this is still true for
+     *  every one of them, leaving loopingOnCustomHome exactly as effective there as before. Package-private
+     *  and the state passed in rather than read from instance fields, so a host-side JVM test can drive it
+     *  directly. */
+    static boolean countsTowardCustomHomeGuard(boolean fromKeyPress, long lastHomeKeyAt, long now) {
+        return !fromKeyPress && now - lastHomeKeyAt >= HOME_KEY_RECENT_MS;
+    }
+
+    /** True once CUSTOM_HOME_GUARD_COUNT attempts to launch home_redirect_component's target have already
+     *  landed within CUSTOM_HOME_GUARD_WINDOW_MS of now, meaning this one should be skipped instead of adding
+     *  another; otherwise records this attempt (by overwriting the oldest slot, attempts[next]) and returns
+     *  false. attempts is a ring buffer of the last attempts.length attempts, oldest at next; the caller
+     *  advances next (mod attempts.length) only when this returns false, since a skipped attempt was never
+     *  recorded. elapsedRealtime, not wall-clock time, so a clock change cannot wedge or unstick the guard.
+     *  Package-private and the ring buffer passed in rather than read from instance fields, so a host-side JVM
+     *  test can drive it directly. */
+    static boolean loopingOnCustomHome(long[] attempts, int next, long now) {
+        int oldest = next % attempts.length;
+        if (now - attempts[oldest] < CUSTOM_HOME_GUARD_WINDOW_MS) return true;
+        attempts[oldest] = now;
+        return false;
     }
 
     /** Runs home_redirect_component's launch; true if it did not throw. False only for
@@ -453,16 +548,47 @@ public class HomeKeyService extends AccessibilityService {
 
     /** home_redirect_component: another app's Home in this launcher's place, resolved fresh on every call (not
      *  cached from loadConfig) so an app disabled or removed after this service was bound still falls back to
-     *  this launcher instead of Home leading nowhere. null when the key is empty or the target is unavailable. */
+     *  this launcher instead of Home leading nowhere. null when the key is empty, the target is unavailable, or
+     *  the target does not itself answer a MAIN+HOME query - installed, enabled and launchable is not enough
+     *  (a utility activity such as a SEND/VIEW handler can be all three and still never be meant as a Home
+     *  screen, which is how one that does not stay in the foreground reached loopingOnCustomHome at all). */
     private Intent redirectTarget() {
         if (homeRedirectComponent.isEmpty()) return null;
+        ComponentName target;
         if (RemoteKeys.isActivity(homeRedirectComponent)) {
-            ComponentName target = ComponentName.unflattenFromString(homeRedirectComponent);
-            return target != null && RemoteKeys.isEnabled(this, target) ? new Intent().setComponent(target) : null;
+            target = ComponentName.unflattenFromString(homeRedirectComponent);
+            if (target == null || !RemoteKeys.isEnabled(this, target)) return null;
+        } else {
+            Intent open = getPackageManager().getLeanbackLaunchIntentForPackage(homeRedirectComponent);
+            if (open == null) open = getPackageManager().getLaunchIntentForPackage(homeRedirectComponent);
+            target = open == null ? null : open.getComponent();
+            if (target == null) return null;
         }
-        Intent open = getPackageManager().getLeanbackLaunchIntentForPackage(homeRedirectComponent);
-        if (open == null) open = getPackageManager().getLaunchIntentForPackage(homeRedirectComponent);
-        return open;
+        if (!resolvesForHome(target)) {
+            Log.w(TAG, "home_redirect_component (" + homeRedirectComponent + ") resolves to " + target
+                    + ", which does not answer a MAIN+HOME query - it is not that app's Home activity");
+            return null;
+        }
+        return new Intent().setComponent(target);
+    }
+
+    /** True when target's own package answers a MAIN+HOME query with exactly this component - the same test
+     *  stock_home_redirect's own loadConfig() already runs for the stock launcher - so home_redirect_component
+     *  is restricted to an activity actually meant to be Home. MATCH_DISABLED_COMPONENTS so this reads the
+     *  manifest's own shape rather than overlapping with RemoteKeys.isEnabled's separate enabled check. */
+    private boolean resolvesForHome(ComponentName target) {
+        Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).setPackage(target.getPackageName());
+        List<String> homeActivities = new ArrayList<>();
+        for (ResolveInfo ri : getPackageManager().queryIntentActivities(home, PackageManager.MATCH_DISABLED_COMPONENTS)) {
+            homeActivities.add(ri.activityInfo.name);
+        }
+        return answersHome(target.getClassName(), homeActivities);
+    }
+
+    /** The class-name comparison at the heart of resolvesForHome, pulled out so a host-side JVM test can drive
+     *  it with plain strings instead of a real PackageManager or ResolveInfo. */
+    static boolean answersHome(String activityName, List<String> homeActivityNames) {
+        return homeActivityNames.contains(activityName);
     }
 
     /** stock_home_redirect while Android's Home is still the stock launcher (launcherx on Google TV outranks this
