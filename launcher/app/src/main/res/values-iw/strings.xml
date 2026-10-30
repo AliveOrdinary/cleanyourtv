@@ -149,4 +149,7 @@
     <string name="race_countdown_days">%1$d ימ׳ %2$d שע׳</string>
     <string name="last_opened">פתיחה אחרונה: %1$s</string>
     <string name="game_live">בשידור חי עכשיו</string>
+    <string name="clock_format_system">מערכת</string>
+    <string name="clock_format_12">12 שעות</string>
+    <string name="clock_format_24">24 שעות</string>
 </resources>

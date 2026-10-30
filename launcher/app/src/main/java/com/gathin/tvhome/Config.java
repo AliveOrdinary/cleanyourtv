@@ -43,6 +43,7 @@ final class Config {
     static final String ROWS_BELOW_DOCK_KEY = "rows_below_dock";
     static final String WALLPAPER_CHOICE_KEY = "wallpaper_choice";
     static final String DOCK_OPACITY_KEY = "dock_opacity";
+    static final String CLOCK_FORMAT_KEY = "clock_format";
     /**
      * Counts the changes made in Launcher settings. Home remembers the count it was built with and rebuilds on
      * resume when it differs, however the settings were left (see MainActivity#onResume).
@@ -131,6 +132,8 @@ final class Config {
     final boolean iconOnlyInputs;
     /** With vpn_pill, the VPN pill as a round lock button (config.xml / theme icon_only_vpn). */
     final boolean iconOnlyVpn;
+    /** Back on the Home screen opens the clock screensaver instead of doing nothing (config.xml / theme back_opens_clock). */
+    final boolean backOpensClock;
     /** App library as a round button in the top bar (config.xml library_button); needs app_library. */
     final boolean libraryButton;
     /** The App library pill after the last Home row; false hides it while libraryButton is on (show_library_pill). */
@@ -185,6 +188,8 @@ final class Config {
     final boolean powerOnHomeAlways;
     /** The Inputs menu lists only inputs reporting connected; the rest fold behind a More inputs row (config.xml / theme inputs_connected_only). */
     final boolean inputsConnectedOnly;
+    /** "12", "24" or "system" (theme clock_format, or Launcher settings' Clock row); see ClockFormat. */
+    final String clockFormat;
     /** The Settings button opens the quick settings panel instead of the TV's Settings (settings_key_panel). */
     final boolean settingsKeyPanel;
     /** Home puts the remote's accessibility helpers back after a force stop (restore_key_services; ServiceRepair). */
@@ -284,7 +289,7 @@ final class Config {
                    boolean keyFilter, boolean dockGlass, String glowStyle, boolean wallpaperCaptions,
                    boolean handleViewInputs, boolean tileMenu, boolean dockEvenPadding, boolean dockBand, boolean cinematicDots, boolean cinematicWhiteFocus, boolean wifiStatusColor, int cinematicScrim, int cinematicArt,
                    Map<String, Set<String>> wallpaperMoods, boolean gamepadPassthrough, boolean consumeVolumeKeys, boolean powerOnHome, boolean homeLongPressHome, boolean wifiStatusWarnings, List<String> topBarApps, boolean showGreeting, boolean headerWhite, boolean clockWallpaper, int clockWallpaperDim, boolean clockGlow, String glassStyle, boolean singleRow, boolean dockBandAll, boolean lunarDate, int lunarUtcOffset, boolean dateBelowClock, boolean vpnPill, String locale, boolean powerOnHomeAlways, boolean inputsConnectedOnly,
-                   int openOnStartNetworkWait, boolean iconOnlyVpn) {
+                   int openOnStartNetworkWait, boolean iconOnlyVpn, String clockFormat, boolean backOpensClock) {
         this.handleViewInputs = handleViewInputs;
         this.tileMenu = tileMenu;
         this.inputKeycodes = inputKeycodes;
@@ -335,6 +340,7 @@ final class Config {
         this.iconOnlyButtons = iconOnlyButtons;
         this.iconOnlyInputs = iconOnlyInputs;
         this.iconOnlyVpn = iconOnlyVpn;
+        this.backOpensClock = backOpensClock;
         this.libraryButton = libraryButton;
         this.showLibraryPill = showLibraryPill;
         this.wifiLabelWidth = wifiLabelWidth;
@@ -385,6 +391,7 @@ final class Config {
         this.powerOnHomeAlways = powerOnHomeAlways;
         this.inputsConnectedOnly = inputsConnectedOnly;
         this.openOnStartNetworkWait = openOnStartNetworkWait;
+        this.clockFormat = clockFormat;
         this.wifiStatusWarnings = wifiStatusWarnings;
         this.topBarApps = Collections.unmodifiableList(topBarApps);
         this.showGreeting = showGreeting;
@@ -460,6 +467,7 @@ final class Config {
         boolean iconOnlyButtons = res.getBoolean(R.bool.icon_only_buttons);
         boolean iconOnlyInputs = res.getBoolean(R.bool.icon_only_inputs);
         boolean iconOnlyVpn = res.getBoolean(R.bool.icon_only_vpn);
+        boolean backOpensClock = res.getBoolean(R.bool.back_opens_clock);
         boolean libraryButton = res.getBoolean(R.bool.library_button);
         boolean showLibraryPill = res.getBoolean(R.bool.show_library_pill);
         int wifiLabelWidth = res.getInteger(R.integer.wifi_label_width);
@@ -498,6 +506,7 @@ final class Config {
         boolean homeLongPressHome = res.getBoolean(R.bool.home_long_press_home);
         boolean powerOnHomeAlways = res.getBoolean(R.bool.power_on_home_always);
         boolean inputsConnectedOnly = res.getBoolean(R.bool.inputs_connected_only);
+        String clockFormat = res.getString(R.string.clock_format);
         boolean dockGlass = res.getBoolean(R.bool.dock_glass);
         boolean dockEvenPadding = res.getBoolean(R.bool.dock_even_padding);
         boolean dockBand = res.getBoolean(R.bool.dock_band);
@@ -570,6 +579,7 @@ final class Config {
             iconOnlyButtons = bool(json, "icon_only_buttons", iconOnlyButtons);
             iconOnlyInputs = bool(json, "icon_only_inputs", iconOnlyInputs);
             iconOnlyVpn = bool(json, "icon_only_vpn", iconOnlyVpn);
+            backOpensClock = bool(json, "back_opens_clock", backOpensClock);
             libraryButton = bool(json, "library_button", libraryButton);
             showLibraryPill = bool(json, "show_library_pill", showLibraryPill);
             wifiLabelWidth = integer(json, "wifi_label_width", wifiLabelWidth, 0, 300);
@@ -608,6 +618,7 @@ final class Config {
             homeLongPressHome = bool(json, "home_long_press_home", homeLongPressHome);
             powerOnHomeAlways = bool(json, "power_on_home_always", powerOnHomeAlways);
             inputsConnectedOnly = bool(json, "inputs_connected_only", inputsConnectedOnly);
+            clockFormat = string(json, CLOCK_FORMAT_KEY, clockFormat);
             dockGlass = bool(json, "dock_glass", dockGlass);
             dockEvenPadding = bool(json, "dock_even_padding", dockEvenPadding);
             dockBand = bool(json, "dock_band", dockBand);
@@ -655,6 +666,7 @@ final class Config {
         int wallpaperDim = json == null ? 0 : integer(json, "wallpaper_dim", 0, 0, 90);
         int dockOpacity = json == null ? 100 : integer(json, "dock_opacity", 100, 30, 100);
         dockOpacity = chosenDockOpacity(choices.getInt(DOCK_OPACITY_KEY, -1), dockOpacity);
+        clockFormat = choices.getString(CLOCK_FORMAT_KEY, clockFormat);
         String wallpaperOrder = json == null ? WallpaperRotation.ORDER_SHUFFLE
                 : string(json, "wallpaper_order", WallpaperRotation.ORDER_SHUFFLE);
         // An unknown order must not silently change how an existing collection rotates.
@@ -694,7 +706,7 @@ final class Config {
                 consumeVolumeKeys, powerOnHome, homeLongPressHome, wifiStatusWarnings, topBarApps, showGreeting, headerWhite, clockWallpaper,
                 Math.max(0, Math.min(90, clockWallpaperDim)), clockGlow, glassStyle, singleRow && dockRow, dockBandAll, lunar, lunarOffset,
                 dateBelowClock, vpnPill, locale, powerOnHomeAlways, inputsConnectedOnly,
-                Math.max(0, Math.min(600, openOnStartNetworkWait)), iconOnlyVpn);
+                Math.max(0, Math.min(600, openOnStartNetworkWait)), iconOnlyVpn, clockFormat, backOpensClock);
     }
 
     /**
@@ -738,12 +750,12 @@ final class Config {
             SharedPreferences.Editor editor = choices.edit();
             if (!"absent".equals(token)) editor.remove("columns").remove("animations")
                     .remove("advanced_effects").remove(ROWS_BELOW_DOCK_KEY).remove(WALLPAPER_CHOICE_KEY)
-                    .remove(DOCK_OPACITY_KEY);
+                    .remove(DOCK_OPACITY_KEY).remove(CLOCK_FORMAT_KEY);
             editor.putString(THEME_SIGNATURE_KEY, signature).commit();
         } else if (!seen.equals(signature)) {
             choices.edit().remove("columns").remove("animations").remove("advanced_effects")
                     .remove(ROWS_BELOW_DOCK_KEY).remove(WALLPAPER_CHOICE_KEY).remove(DOCK_OPACITY_KEY)
-                    .putString(THEME_SIGNATURE_KEY, signature).commit();
+                    .remove(CLOCK_FORMAT_KEY).putString(THEME_SIGNATURE_KEY, signature).commit();
         }
     }
 

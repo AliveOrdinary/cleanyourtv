@@ -98,4 +98,7 @@
     <string name="race_countdown_days">%1$dd %2$dt</string>
     <string name="last_opened">Sidst åbnet %1$s</string>
     <string name="game_live">Live nu</string>
+    <string name="clock_format_system">System</string>
+    <string name="clock_format_12">12 timer</string>
+    <string name="clock_format_24">24 timer</string>
 </resources>

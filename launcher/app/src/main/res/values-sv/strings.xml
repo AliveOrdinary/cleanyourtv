@@ -122,4 +122,7 @@
     <string name="race_race">Lopp</string>
     <string name="last_opened">Senast öppnad %1$s</string>
     <string name="game_live">Direkt nu</string>
+    <string name="clock_format_system">System</string>
+    <string name="clock_format_12">12 timmar</string>
+    <string name="clock_format_24">24 timmar</string>
 </resources>

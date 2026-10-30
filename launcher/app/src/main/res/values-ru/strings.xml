@@ -152,4 +152,7 @@
          last opened, e.g. "5 minutes ago" or "yesterday, 9:40 pm". -->
     <string name="last_opened">Последний запуск: %1$s</string>
     <string name="game_live">Сейчас в эфире</string>
+    <string name="clock_format_system">Системные</string>
+    <string name="clock_format_12">12-часовой</string>
+    <string name="clock_format_24">24-часовой</string>
 </resources>

@@ -123,4 +123,7 @@
     <string name="last_opened">Mở lần cuối %1$s</string>
     <string name="tile_move">Di chuyển</string>
     <string name="game_live">Đang diễn ra</string>
+    <string name="clock_format_system">Hệ thống</string>
+    <string name="clock_format_12">12 giờ</string>
+    <string name="clock_format_24">24 giờ</string>
 </resources>
