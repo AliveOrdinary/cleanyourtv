@@ -1,5 +1,6 @@
 package com.gathin.tvhome;
 
+import android.content.ActivityNotFoundException;
 import org.junit.Test;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -56,5 +57,22 @@ public class HomeKeyServiceTest {
     @Test public void alwaysGoesHomeAfterScreenOnUntilAKey() {
         assertTrue(HomeKeyService.stillArmed(SOON, SOON + HomeKeyService.SCREEN_ON_WINDOW_MS));
         assertFalse(HomeKeyService.stillArmed(SOON, 0));
+    }
+
+    @Test public void customHomeSucceedsWhenTheStarterDoesNotThrow() {
+        assertTrue(HomeKeyService.tryCustomHome(() -> { }));
+    }
+
+    @Test public void customHomeFallsThroughWhenTheTargetCannotBeFound() {
+        assertFalse(HomeKeyService.tryCustomHome(() -> { throw new ActivityNotFoundException(); }));
+    }
+
+    @Test public void customHomeFallsThroughWhenTheTargetIsNotExportedOrPermissionProtected() {
+        assertFalse(HomeKeyService.tryCustomHome(() -> { throw new SecurityException("not exported"); }));
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void customHomeDoesNotSwallowAnUnrelatedRuntimeException() {
+        HomeKeyService.tryCustomHome(() -> { throw new IllegalStateException("not ours to catch"); });
     }
 }

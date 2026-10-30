@@ -423,13 +423,32 @@ public class HomeKeyService extends AccessibilityService {
     }
 
     private void openHome() {
-        Intent open = redirectTarget();
-        if (open == null) {
-            open = stockHomeStays() ? new Intent(this, MainActivity.class)
-                    : new Intent(Intent.ACTION_MAIN).setPackage(getPackageName());
+        Intent custom = redirectTarget();
+        if (custom != null) {
+            Intent toStart = custom.addCategory(Intent.CATEGORY_HOME)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+            if (tryCustomHome(() -> startActivity(toStart))) return;
         }
+        Intent open = stockHomeStays() ? new Intent(this, MainActivity.class)
+                : new Intent(Intent.ACTION_MAIN).setPackage(getPackageName());
         startActivity(open.addCategory(Intent.CATEGORY_HOME)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED));
+    }
+
+    /** Runs home_redirect_component's launch; true if it did not throw. False only for
+     *  ActivityNotFoundException or SecurityException - a target that passed redirectTarget()'s checks but
+     *  could not actually be started (removed or disabled in between, or an unexported/permission-protected
+     *  activity) - so openHome() falls through to this launcher's own Home instead of Home doing nothing.
+     *  Any other RuntimeException is not ours to swallow and still propagates. Package-private and taking a
+     *  Runnable, not the Intent or a Context, so a host-side JVM test can exercise the catch without a real
+     *  Android Intent. */
+    static boolean tryCustomHome(Runnable starter) {
+        try {
+            starter.run();
+            return true;
+        } catch (ActivityNotFoundException | SecurityException unavailable) {
+            return false;
+        }
     }
 
     /** home_redirect_component: another app's Home in this launcher's place, resolved fresh on every call (not
